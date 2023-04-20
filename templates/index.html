@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Temperature Sensor App</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="chart-container">
+        <canvas id="temperatureChart"></canvas>
+    </div>
+    <p id="coordinates"></p>
+    <p id="temperature"></p>
+    <button id="startButton">Toaster Run</button>
+    <button id="stopButton">Toaster Stop</button>
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
