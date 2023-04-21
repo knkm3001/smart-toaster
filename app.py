@@ -1,24 +1,21 @@
-from flask import Flask, render_template, jsonify, request
-import random
-import time
 import sys
+import time
+import random
 import atexit
 import signal
-import concurrent.futures
-import RPi.GPIO as GPIO
+import multiprocessing
+
+from flask import Flask, render_template, jsonify, request
 
 from read_temp import read_temp
-from pid import do_pid_process, ssr_control
+from pid import run_pid_process, ssr_control, gpio_creanup
 
-GPIO.setmode(GPIO.BCM)
-GPIO.setup(14,GPIO.OUT)
 cleanup_done = False
-print(type(GPIO),id(GPIO))
+process = None
+status = None
+gpio_pin = 14
 
 app = Flask(__name__)
-app.is_running = False
-app.future = None
-
 
 @app.route('/')
 def index():
@@ -27,67 +24,79 @@ def index():
 
 @app.route('/get_status')
 def get_status():
-    # ここで、既存のPythonプログラムを使って温度センサーからデータを取得します。
-    # 仮のデータを返すために、ランダムな温度を生成します。
-    dummy = False
+    dummy = False # TODO for dev
     temperature = round(random.uniform(20, 30), 2) if dummy else read_temp()
+    
+    if process is not None and process.is_alive():
+        process_status = status.value
+    else:
+        process_status = 'not running'
+
     return jsonify(
-        temperature=temperature,
-        timestamp=int(time.time()),
-        is_running=app.is_running
+        temperature = temperature,
+        timestamp = int(time.time()),
+        process_status = process_status
         )
 
 
 @app.route('/cancel_process')
 def cancel_process():
-    print('stop!!!!!!!')
-    ssr_control(GPIO,power=False)
-    app.is_running = False
-    app.future.cancel()
-    return jsonify({'message': 'process stoped'}), 200
+    global process, status
+    ssr_control(power=False) # とにかくpowerはoff
+
+    if process is None or not process.is_alive():
+        return jsonify({'message': 'process is not running'}), 400
+
+    process.terminate()
+    process.join() # 子プロセスが完全にkillされることを待つ
+    status.value = 'killed'
+    return jsonify({'message': 'Task killed'})
 
 
 @app.route('/run_process',methods=["POST"])
-def exec_profile():
+def run_process():
+    global process, status
+
     # 与えられたプロファイルに従ってトースターを操作する
     if not request.method == 'POST':
         return jsonify({'error': 'POST required'}), 400
-    elif app.is_running:
-        return jsonify({'error': 'process is running'}), 400
+    elif process is not None and process.is_alive():
+        return jsonify({'error': 'process is already running'}), 400
     else:
         print('request',request)
-        data = request.get_json()
-        print(data)
+        profile = request.get_json()
+        print(profile)
 
-        if data is None:
+        if profile is None:
             # JSON データが存在しない場合、400 ステータスコードを返す
-            return jsonify({'error': 'No data provided'}), 400
+            return jsonify({'error': 'No profile provided'}), 400
         else:
-            app.is_running = True
             print('process start')
-            # 非同期の別プロセスでヒーターをPID制御
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                app.future = executor.submit(do_pid_process, data,GPIO)
-
-            return jsonify({'message': 'Data received successfully'}), 200
+            manager = multiprocessing.Manager() # プロセス間でデータを共有のため、共有オブジェクトを作成
+            status = manager.Value('s', 'running')
+            process = multiprocessing.Process(target=run_pid_process, args=(status,profile))
+            process.start()
+            return jsonify({'message': 'process started'}), 200
 
 
 def cleanup():
     global cleanup_done
     if not cleanup_done:
-        print("Cleaning up resources...")
-        ssr_control(GPIO,power=False)
-        GPIO.cleanup()
         cleanup_done = True
+        print("Cleaning up resources...")
+        ssr_control(power=False)
+        gpio_creanup()
+    print('clean up done')
+
 
 def exit_handler(signal, frame):
     print("Ctrl+C pressed. Exiting...")
     cleanup()
     sys.exit(0)
 
-signal.signal(signal.SIGINT, exit_handler) # Ctrl+c時
-atexit.register(cleanup) # 通常修了時
 
+signal.signal(signal.SIGINT, exit_handler) # Ctrl+C (デバッグモードだとプロセスが二つあるから２回実行される)
+#atexit.register(cleanup) # 通常修了時
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

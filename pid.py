@@ -1,6 +1,8 @@
 import time
 import numpy as np
+import RPi.GPIO as GPIO
 from scipy.interpolate import interp1d
+from typing import Final
 
 from read_temp import read_temp
 
@@ -9,15 +11,27 @@ kp = 1.0
 ki = 0.1
 kd = 0.05
 dt = 1.0
-threshold = 0.5
 
-def ssr_control(GPIO,power:bool):
-    gpio_status = GPIO.HIGH if power else GPIO.LOW
-    GPIO.output(14,gpio_status)
+MV_THRESHOLD:Final[float] = 0.5
+TEMP_THRESHOLD:Final[int] = 40
+
+GPIO_PIN:Final[int] = 14
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(GPIO_PIN,GPIO.OUT)
 
 
-def do_pid_process(profile,GPIO):
+def gpio_creanup():
+    GPIO.cleanup()
 
+
+def ssr_control(power:bool):
+    if power:
+        GPIO.output(GPIO_PIN,GPIO.HIGH)
+    else:
+        GPIO.output(GPIO_PIN,GPIO.LOW)
+
+
+def run_pid_process(status,profile):
     pid = PIDController(kp, ki, kd, dt)
 
     profile = generate_interp_data(profile)
@@ -26,29 +40,25 @@ def do_pid_process(profile,GPIO):
         print('current target',data)
         
         error = data['temp'] - read_temp()
-
-        power = False
-        if error > 40:
-            power = True
-            ssr_control(GPIO,power=power)
+        
+        # 誤差量が閾値内のときだけPIDする
+        if error > TEMP_THRESHOLD:
+            ssr_control(power=True)
             pid.param_reset()
-        elif error < -40:
-            ssr_control(GPIO,power=False)
+        elif error < -1*TEMP_THRESHOLD:
+            ssr_control(power=False)
             pid.param_reset()
         else:
-            # -40 < temp < 40 のときpid
-            # PID制御器の更新
-            control_signal = pid.update(error)
-            power = True if control_signal >= threshold else False
-            ssr_control(GPIO,power=power)
+            mv = pid.update(error) # PID制御器の更新
+            power = True if mv >= MV_THRESHOLD else False
+            ssr_control(power)
     
-        # 結果の表示
-        print(f"Time: {data['time']}, Target: {data['temp']}, Current: {read_temp()}, toaster : {power}")
+        print(f"Time: {data['time']}, Target temp: {data['temp']}, Current temp: {read_temp()}, mv: {mv}, toaster power: {power}")
     
-        # サンプリング時間だけ待機
-        time.sleep(dt)
-
-    ssr_control(power=False)
+        time.sleep(dt) # サンプリング時間だけ待機
+    else:
+        ssr_control(power=False)
+        status.value = 'finished'
 
 
 def generate_interp_data(data):
