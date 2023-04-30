@@ -8,12 +8,14 @@ import multiprocessing
 from flask import Flask, render_template, jsonify, request
 
 from read_temp import read_temp
-from pid import run_pid_process, ssr_control, gpio_creanup
+from pid import run_pid_process, ssr_control, gpio_creanup, generate_interp_data
 
 cleanup_done = False
 process = None
-status = None
 gpio_pin = 14
+
+manager = multiprocessing.Manager() # プロセス間でデータを共有のため、共有オブジェクトを作成
+status = manager.Value('s', 'not running')
 
 app = Flask(__name__)
 
@@ -26,16 +28,10 @@ def index():
 def get_status():
     dummy = False # TODO for dev
     temperature = round(random.uniform(20, 30), 2) if dummy else read_temp()
-    
-    if process is not None and process.is_alive():
-        process_status = status.value
-    else:
-        process_status = 'not running'
-
     return jsonify(
         temperature = temperature,
         timestamp = int(time.time()),
-        process_status = process_status
+        process_status = status.value
         )
 
 
@@ -45,12 +41,40 @@ def cancel_process():
     ssr_control(power=False) # とにかくpowerはoff
 
     if process is None or not process.is_alive():
-        return jsonify({'message': 'process is not running'}), 400
+        if status.value == 'finished':
+            return jsonify({'message': 'Process is already finished'}), 200
+        elif status.value == 'killed':
+            return jsonify({'message': 'Process is already killed'}), 200
+        else:
+            return jsonify({'message': 'Process is not running'}), 200
+    else:
+        process.terminate()
+        process.join() # 子プロセスが完全にkillされることを待つ
+        status.value = 'killed'
+        return jsonify({'message': 'Task killed'}), 200
 
-    process.terminate()
-    process.join() # 子プロセスが完全にkillされることを待つ
-    status.value = 'killed'
-    return jsonify({'message': 'Task killed'})
+
+@app.route('/status_clear')
+def status_clear():
+    global status
+    if process is None or not process.is_alive():
+        status.value  = 'not running'
+        return jsonify({'message': 'status is cleared'}), 200
+    else:
+        return jsonify({'message': 'process is alive'}), 400
+
+
+@app.route('/get_profile', methods=['POST'])
+def get_profile():
+    # プロファイルデータ
+    payload_profile = request.get_json()
+    print('payload_profile',payload_profile)
+    if payload_profile is None:
+        # JSON データが存在しない場合、400 ステータスコードを返す
+        return jsonify({'error': 'No profile provided'}), 400
+    else:
+        profile = generate_interp_data(payload_profile)
+        return jsonify(profile), 200
 
 
 @app.route('/run_process',methods=["POST"])
@@ -63,19 +87,22 @@ def run_process():
     elif process is not None and process.is_alive():
         return jsonify({'error': 'process is already running'}), 400
     else:
-        print('request',request)
-        profile = request.get_json()
-        print(profile)
+        payload_profile = request.get_json()
+        print('payload_profile',payload_profile)
 
-        if profile is None:
+        if payload_profile is None:
             # JSON データが存在しない場合、400 ステータスコードを返す
             return jsonify({'error': 'No profile provided'}), 400
         else:
+            profile = generate_interp_data(payload_profile)
+            if not profile:
+                return jsonify({'message': 'invalid profile'}), 400
+            
+            print('profile:',profile)
             print('process start')
-            manager = multiprocessing.Manager() # プロセス間でデータを共有のため、共有オブジェクトを作成
-            status = manager.Value('s', 'running')
             process = multiprocessing.Process(target=run_pid_process, args=(status,profile))
             process.start()
+            status.value = 'running'
             return jsonify({'message': 'process started'}), 200
 
 

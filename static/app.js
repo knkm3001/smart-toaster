@@ -1,3 +1,9 @@
+const defaultMaxY = 300;
+const defaultMaxX = 600;
+let do_pid_process = false;
+let do_record_temp = false;
+let process_start_timestamp = NaN; // トースターrun時のタイムスタンプ
+
 const chartElement = document.getElementById('temperatureChart');
 const temperatureChart = new Chart(chartElement, {
   type: 'line',
@@ -9,7 +15,7 @@ const temperatureChart = new Chart(chartElement, {
         backgroundColor: 'rgba(75, 192, 192, 0.2)',
         fill: false,
         pointRadius: 6,
-        data: [{ x: 0, y: 0 }]
+        data: []
       },
       {
         label: 'Current Temp',
@@ -32,7 +38,7 @@ const temperatureChart = new Chart(chartElement, {
     scales: {
       x: {
         min: 0,
-        max: 600, // デフォルト600秒
+        max: defaultMaxX, // デフォルト600秒
         type: 'linear',
         title: {
           display: true,
@@ -45,7 +51,7 @@ const temperatureChart = new Chart(chartElement, {
       },
       y: {
         min: 0,
-        max: 300,
+        max: defaultMaxY,
         title: {
           display: true,
           text: 'Temperature (°C)'
@@ -60,12 +66,12 @@ const temperatureChart = new Chart(chartElement, {
       tooltip: {
         enabled: false
       },
-      customPlugin: {
+      mousePosition: {
         enabled: true
       },
     },
     onClick: (event) => {
-      if (selectedPoint || do_process) return;
+      if (selectedPoint || do_pid_process) return;
       const xValue = temperatureChart.scales.x.getValueForPixel(event.native.offsetX);
       const yValue = temperatureChart.scales.y.getValueForPixel(event.native.offsetY);
       const customData = {
@@ -73,14 +79,14 @@ const temperatureChart = new Chart(chartElement, {
         y: parseInt(yValue)
       };
 
-      if (getProfileLastData(temperatureChart).x > xValue) return;
+      if (getLastData(temperatureChart,0).x > xValue) return;
       temperatureChart.data.datasets[0].data.push(customData);
 
       // クリックした点の場所でグラフの右端を変化
-      const lastData = getProfileLastData(temperatureChart);
-      if (lastData.x != 0){
+      const lastProfileData = getLastData(temperatureChart,0);
+      if (lastProfileData.x != 0){
         const x_end = temperatureChart.scales.x.end;
-        chart_max_x = lastData.x < x_end - 150 ? x_end : x_end + 300;
+        chart_max_x = lastProfileData.x < x_end - 150 ? x_end : x_end + 300;
         temperatureChart.options.scales.x.max = chart_max_x        
       }
 
@@ -89,36 +95,35 @@ const temperatureChart = new Chart(chartElement, {
 
       temperatureChart.update();
     }
-  }
+  },
+  plugins: [],
 });
 
-fetchTemperatureData();
+fetchStatus(); //初期化データ取得
 
 let selectedPoint = null; // ドラッグアンドドロップで掴んだポイント
-let do_process = false;
-let process_start_timestamp = NaN; // トースターrun時のタイムスタンプ
 
 // 図上で押下したら近くのポイントを取得する
 chartElement.addEventListener('mousedown', (event) => {
-  if (do_process) return;
+  if (do_pid_process) return;
   const elements = temperatureChart.getElementsAtEventForMode(event, 'nearest', { intersect: true }, true);
-  if (elements.length) {
+  if (elements.length && elements[0].index != 0) { // 0番目は動かさない
     selectedPoint = elements[0];
   }
 });
 
 // 図上でクリックを離したらポイントを離す
 chartElement.addEventListener('mouseup', () => {
-  if (do_process) return;
+  if (do_pid_process) return;
   selectedPoint = null;
 });
 
 // 図上でポイントをドラッグしたら動かす
 chartElement.addEventListener('mousemove', (event) => {
-  const xValue = temperatureChart.scales.x.getValueForPixel(event.offsetX);
-  const yValue = temperatureChart.scales.y.getValueForPixel(event.offsetY);
+  const xValue = Math.max(temperatureChart.scales.x.getValueForPixel(event.offsetX),0);
+  const yValue = Math.max(temperatureChart.scales.y.getValueForPixel(event.offsetY),0); 
   const coordinatesElement = document.getElementById('coordinates');
-  coordinatesElement.textContent = `X: ${xValue.toFixed(2)}, Y: ${yValue.toFixed(2)}`;
+  coordinatesElement.textContent = `Time: ${xValue.toFixed(1)} [sec], Temperature: ${yValue.toFixed(1)} [℃]`;
 
   if (selectedPoint) {
     const datasetIndex = selectedPoint.datasetIndex;
@@ -132,13 +137,13 @@ chartElement.addEventListener('mousemove', (event) => {
 
 // 右クリックでポイントを消す
 chartElement.addEventListener('contextmenu', (event) => {
-  if (do_process) return;
+  if (do_pid_process) return;
   // デフォルトのコンテキストメニューを無効化
   event.preventDefault();
 
   // クリックされた点を取得
   const elements = temperatureChart.getElementsAtEventForMode(event, 'nearest', { intersect: true }, true);
-  if (elements.length) {
+  if (elements.length && elements[0].index != 0) { // 0番目は消さない
     const element = elements[0];
     const datasetIndex = element.datasetIndex;
     const dataIndex = element.index;
@@ -151,36 +156,55 @@ chartElement.addEventListener('contextmenu', (event) => {
   }
 });
 
-
-function getProfileLastData(chart) {
-  return chart.data.datasets[0].data[chart.data.datasets[0].data.length - 1]
+// dataの最後を取得
+function getLastData(chart,dataIndex) {
+  return chart.data.datasets[dataIndex].data[chart.data.datasets[dataIndex].data.length - 1]
 }
 
+// dataの最大値を取得
+function getMaxData(chart,dataIndex,key) {
+  const data = chart.data.datasets[dataIndex].data
+  const maxIndex = data.reduce((maxIndex, current, currentIndex) => {
+    return current[key] > data[maxIndex][key] ? currentIndex : maxIndex;
+  }, 0);
+  return data[maxIndex];
+}
 
 // 温度データを定期的に取得し、リアルタイムでグラフに追加する
-function fetchTemperatureData() {
+function fetchStatus() {
   fetch('/get_status')
     .then(response => response.json())
     .then(data => {
       console.log(data)
-      const coordinatesElement = document.getElementById('temperature');
-      coordinatesElement.textContent = `${data.temperature.toFixed(2)} ℃`;
+
+      // 表示部
+      document.getElementById('temperature').textContent = `current temperature: ${data.temperature.toFixed(2)} ℃`;
+      document.getElementById('processStatus').textContent = `current process: ${data.process_status}`;
 
       // 初期値設定
-      if(temperatureChart.data.datasets[0].data[0].y == 0){
-        temperatureChart.data.datasets[0].data[0].y = data.temperature;
+      if(temperatureChart.data.datasets[0].data.length == 0){
+        temperatureChart.data.datasets[0].data[0] = {x:0, y:data.temperature};
         temperatureChart.update();
       }
       
-      // PIDプロセス起動中なら温度をグラフにレンダリングする
-      if (do_process) {
-        const temperatureData = {
+      // 温度をグラフにレンダリングする
+      if (do_record_temp) {
+        const currentTempData = {
           x: data.timestamp - parseInt(process_start_timestamp / 1000), // sec to sec
           y: data.temperature
         };
-        temperatureChart.data.datasets[1].data.push(temperatureData);
-        console.log(temperatureData);
-        console.log(temperatureChart.data.datasets[1].data)
+        temperatureChart.data.datasets[1].data.push(currentTempData);
+        console.log('current data',currentTempData)
+        
+        // 右端を拡張
+        if(currentTempData.x >= temperatureChart.options.scales.x.max - 60){
+          temperatureChart.options.scales.x.max += 60;
+        }
+
+        // 上端を拡張
+        if(currentTempData.y >= temperatureChart.options.scales.y.max - 20){
+          temperatureChart.options.scales.y.max += 20;   
+        }
     
         temperatureChart.update();
       }
@@ -190,16 +214,25 @@ function fetchTemperatureData() {
 }
 
 // 2秒ごとに温度データを取得する
-setInterval(fetchTemperatureData, 2000);
+setInterval(fetchStatus, 2000);
 
-// スタートボタン設定
+// トースターランボタンの設定
 const startButton = document.getElementById('startButton');
 startButton.addEventListener('click', () => {
-  do_process = true
+  do_pid_process = true;
+  do_record_temp = true;
+  
+  // プロセス実行中は、プロセス実行ボタンとclearボタンは押せない
   startButton.setAttribute("disabled", true);
+  document.getElementById('clear').setAttribute("disabled", true);
 
+  // 右端を調整
+  const profileLastData = getLastData(temperatureChart,0); // profileの最後のデータ取得
+  temperatureChart.options.scales.x.max = parseInt(profileLastData.x/60 + 1)*60
+  temperatureChart.update();
+
+  // TODO サーバ側とフロント側でタイムスタンプが別なので統一する
   process_start_timestamp = Date.now()
-  console.log(do_process)
   console.log(process_start_timestamp)
 
   fetch('/run_process', {
@@ -223,26 +256,158 @@ startButton.addEventListener('click', () => {
     });
 });
 
-// ストップボタン設定
+// プロセスキャンセルボタン設定
 const stopButton = document.getElementById('stopButton');
 stopButton.addEventListener('click', () => {
-  do_process = false;
-  process_start_timestamp = NaN;
-
-  startButton.removeAttribute("disabled");
-
-  // 温度記録から点を削除
-  temperatureChart.data.datasets[1].data = [];
-  // チャートを更新
-  temperatureChart.update();
-
   fetch('/cancel_process', {
     method: 'GET'
   })
     .then(response => {
-      console.log(response);
+      if (!response.ok) {
+        throw new Error('Network response was not ok');
+      }
+      return response.json();
+    })
+    .then(data => {
+      console.log(data);
+      if(data['message'] == 'Task killed'){
+        do_pid_process = false;
+        document.getElementById('clear').removeAttribute("disabled");
+        document.getElementById('processStatus').textContent = `current process: killed`;
+      }else{
+        do_pid_process = false;
+        document.getElementById('clear').removeAttribute("disabled");
+      }
     })
     .catch(error => {
       console.error(error);
     });
+});
+
+
+function initProcessStatus(){
+  fetch('/status_clear', {
+    method: 'GET'
+  })
+    .then(response => {
+      if (!response.ok) {
+        throw new Error('Network response was not ok');
+      }
+      return response.json();
+    })
+    .then(data => {
+      console.log(data);
+      if(data.message == 'status is cleared'){
+        document.getElementById('processStatus').textContent = `current process: not running`;
+      }
+    })
+    .catch(error => {
+      console.error(error);
+    });
+}
+
+
+function downloadJson(jsonData, fileName) {
+  const dataStr = JSON.stringify(jsonData, null, 2); // JSONデータを整形して文字列に変換
+  const blob = new Blob([dataStr], { type: 'application/json;charset=utf-8' }); // Blobオブジェクトを作成
+  const url = URL.createObjectURL(blob); // BlobオブジェクトからURLを生成
+
+  const link = document.createElement('a'); // ダウンロード用のリンク要素を作成
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click(); // リンク要素をクリックしてダウンロードを実行
+  document.body.removeChild(link); // リンク要素を削除
+  URL.revokeObjectURL(url); // BlobオブジェクトのURLを解放
+}
+
+document.getElementById('saveProfile').addEventListener('click', () => {
+  const fileName = 'profile.json';
+  jsonData = temperatureChart.data.datasets[0].data;
+  downloadJson(jsonData, fileName);
+});
+
+const fileInput = document.getElementById('fileInput');
+document.getElementById('uploadProfile').addEventListener('click', () => {
+  fileInput.click();
+});
+
+// ファイルアップロード周り
+fileInput.addEventListener('change', () => {
+  const file = fileInput.files[0];
+  if (!file) {
+      return;
+  }
+  const fileReader = new FileReader();
+  fileReader.onload = async (event) => { // fileReaderにファイルを噛ませたあとのコールバック関数
+      try {
+          const jsonContent = JSON.parse(event.target.result);
+          console.log('JSON Content:');
+          console.log(jsonContent)
+          temperatureChart.data.datasets[0].data = jsonContent;
+          
+          // 右端を拡張
+          const profileLastData = getLastData(temperatureChart,0); // profileの最後のデータ取得
+          if(profileLastData.x >= defaultMaxX - 60){
+            temperatureChart.options.scales.x.max = parseInt(profileLastData.x/60 + 1)*60
+          }
+
+          // 上端を拡張
+          const maxProfileData = getMaxData(temperatureChart,0,'y'); // profileの最大の温度を取得
+          console.log('max',maxProfileData);
+          if(maxProfileData.y >= defaultMaxY - 20){
+            temperatureChart.options.scales.y.max = parseInt(maxProfileData.y/20 + 1)*20   
+          }else{
+            temperatureChart.options.scales.y.max = defaultMaxY;
+          }
+
+          temperatureChart.update();
+
+      } catch (error) {
+          console.error('Error parsing JSON file:');
+          console.log(error)
+          alert('Invalid JSON file.');
+      }
+  };
+  fileReader.readAsText(file);
+  fileInput.value = ""; // リセット
+});
+
+
+document.getElementById('downloadChartData').addEventListener('click', () => {
+  fetch('/get_profile', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(temperatureChart.data.datasets[0].data)
+  })
+  .then(response => {
+    if (!response.ok) {
+      throw new Error('Network response was not ok');
+    }
+    return response.json();
+  })
+  .then(data => {
+    const jsonData = [data,temperatureChart.data.datasets[1].data];
+    const fileName = 'chart_data.json';
+    downloadJson(jsonData, fileName);
+  })
+  .catch(error => {
+    console.error('Error:', error);
+  });  
+});
+
+document.getElementById('clear').addEventListener('click', () => {
+  temperatureChart.options.scales.x.max = defaultMaxX;
+  temperatureChart.options.scales.y.max = defaultMaxY;
+  temperatureChart.data.datasets[0].data = [];
+  temperatureChart.data.datasets[1].data = [];
+  do_pid_process = false;
+  do_record_temp = false;
+  initProcessStatus();
+  startButton.removeAttribute("disabled");
+  fetchStatus(); //初期化データ取得
+  temperatureChart.update();
+  console.log('clear!')
 });
