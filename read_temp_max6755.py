@@ -17,9 +17,11 @@ def read_temp():
     return temperatureData * 0.25
 
 if __name__ == '__main__':
-    while True:
-        time.sleep(1)
-        temp = read_temp()
-        print(temp)
-
-    spi.close
+    # for debug
+    print("read temp for debug.")
+    try:
+        while True:
+            time.sleep(1)
+            print(read_temp())
+    except KeyboardInterrupt:
+        print("read temp done.")

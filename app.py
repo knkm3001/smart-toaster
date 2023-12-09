@@ -8,13 +8,14 @@ from typing import Final
 
 from flask import Flask, render_template, jsonify, request
 
-import read_temp_max6755 as max6755
+# import read_temp_max6755 as max6755
 from read_temp import read_temp
-from pid import run_pid_process, ssr_control, gpio_creanup, generate_interp_data
+from ssr_control import gpio_control, gpio_creanup
+from pid import run_pid_process
+from api_utils import generate_interp_data
 
 cleanup_done = False
 process = None
-gpio_pin:Final[int] = 14
 
 manager = multiprocessing.Manager() # プロセス間でデータを共有のため、共有オブジェクトを作成
 status = manager.Value('s', 'not running')
@@ -28,8 +29,9 @@ def index():
 
 @app.route('/get_status')
 def get_status():
-    temperature = max6755.read_temp()
-    #temperature = round(random.uniform(20, 30), 2)
+    temperature = read_temp()
+    # max6755を使用するのであればこちら
+    #temperature = max6755.read_temp()
     return jsonify(
         temperature = temperature,
         timestamp = int(time.time()),
@@ -40,7 +42,7 @@ def get_status():
 @app.route('/cancel_process')
 def cancel_process():
     global process, status
-    ssr_control(power=False) # とにかくpowerはoff
+    gpio_control(power=False) # とにかくpowerはoff
 
     if process is None or not process.is_alive():
         if status.value == 'finished':
@@ -100,11 +102,11 @@ def run_process():
             if not profile:
                 return jsonify({'message': 'invalid profile'}), 400
             
-            print('profile:',profile)
-            print('process start')
+            # PID制御プロセスを非同期で実行
             process = multiprocessing.Process(target=run_pid_process, args=(status,profile))
             process.start()
             status.value = 'running'
+            print('process start!! pid: ',process.pid)
             return jsonify({'message': 'process started'}), 200
 
 
@@ -113,7 +115,7 @@ def cleanup():
     if not cleanup_done:
         cleanup_done = True
         print("Cleaning up resources...")
-        ssr_control(power=False)
+        gpio_control(power=False)
         gpio_creanup()
     print('clean up done')
 
