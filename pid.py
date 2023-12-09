@@ -1,22 +1,22 @@
 import time
-import numpy as np
-import RPi.GPIO as GPIO
-from scipy.interpolate import interp1d
 from typing import Final
 from collections import deque
 from datetime import datetime
 
+import numpy as np
+import RPi.GPIO as GPIO
+from scipy.interpolate import interp1d
+
+import read_temp_max6755 as max6755
 from read_temp import read_temp
 
 # PID制御器のパラメータとサンプリング時間
-kp = 10.0  # 比例
-ki = 0.05  # 積分
-kd = 8.0 # 微分
-dt = 1.0  # サンプリング時間[sec]
+kp:Final[float] = 10.0  # 比例
+ki:Final[float] = 0.05  # 積分
+kd:Final[float] = 20.0 # 微分
+dt:Final[float] = 1.0  # サンプリング時間[sec]
 
-
-MV_THRESHOLD:Final[float] = 1000.0 
-TEMP_THRESHOLD:Final[int] = 1000.0 #[℃] PIDが働く範囲
+MV_THRESHOLD:Final[float] = 1000.0 # 操作量の閾値
 
 GPIO_PIN:Final[int] = 14
 GPIO.setmode(GPIO.BCM)
@@ -39,13 +39,22 @@ def run_pid_process(status,profile):
         
         pid = PIDController(kp, ki, kd, dt)
         current_time = 0
+        data_file = 'data_'+datetime.now().strftime("%Y%m%d_%H%M") + '.txt'
+
         for data in profile:
-            error = data['temp'] - read_temp()
+            error = data['temp'] - max6755.read_temp()
+            pid.update(error) # PID制御器の更新
+            param = pid.get_current_pid_param()
+            for key,val in param.items():
+                param[key] = round(val,2)
+            print(param)
+            pot = round(dt*param['mv']/MV_THRESHOLD,2) # power on time [sec]
 
-            mv = pid.update(error) # PID制御器の更新
-            pot = round(dt*mv/MV_THRESHOLD,2) # [sec]
+            current_data = f"Time: {data['time']}, Target temp: {data['temp']}, Current temp: {max6755.read_temp()}, toaster Ton: {pot} [sec], mv:{param['mv']}, vp:{param['vp']}, vi:{param['vi']}, vd:{param['vd']}, integral:{param['integral']}"
+            with open(data_file, 'a') as file:
+                 file.write(current_data + '\n')
+            print(current_data)
 
-            print(f"Time: {data['time']}, Target temp: {round(data['temp'],2)}, Current temp: {read_temp()}, mv: {round(mv,2)}, toaster Ton: {pot} [sec]")
             if pot > 0:
                 pot = pot if pot > 0.01 else 0.01
                 ssr_control(power=True)
@@ -60,10 +69,10 @@ def run_pid_process(status,profile):
         else:
             ssr_control(power=False)
             status.value = 'finished'
-    except Exception as e:
+    except KeyboardInterrupt:#Exception as e:
         ssr_control(power=False)
         print('error!:',str(e))
-        status.value = 'error'
+        status.value = 'error:' + str(e)
 
 
 def generate_interp_data(data):
@@ -103,7 +112,7 @@ def generate_interp_data(data):
     if is_invalid_data:
         return []
     else:
-        return [{'time':x,'temp':y} for x,y in zip(x_new,y_new)]
+        return [{'time':x,'temp':round(y,2)} for x,y in zip(x_new,y_new)]
 
 
 class PIDController:
@@ -111,82 +120,91 @@ class PIDController:
     PID制御器クラス
     """
     def __init__(self, kp, ki, kd, dt):
+        # 定数
         self.kp = kp
         self.ki = ki
         self.kd = kd
         self.dt = dt
+        
+        # 変数
+        self.mv = 0
+        self.vp = 0
+        self.vi = 0
+        self.vd = 0
         self.ex_mv = 0.0
         self.ex_err = 0.0
         self.ex2_err = 0.0
-        
-        self.is_windup = False
-        self.data_file = 'data_'+datetime.now().strftime("%Y%m%d_%H%M") + '.txt'
 
-        self.use_integral_limit = False
+        self.is_windup = False
+
+        self.use_integral_limit = False # エラーの積分値に範囲を与える
         if self.use_integral_limit:
-            self.integral_sec = 180
+            self.integral_sec = 180 # [sec]
             self.integral = BoundedQueue(self.integral_sec) # arg [sec]分の変数を誤差量としてため込む
         else:
             self.integral = 0.0
 
 
-
     def reset_param(self):
+        self.mv = 0
+        self.vp = 0
+        self.vi = 0
+        self.vd = 0
         self.ex_mv = 0.0
         self.ex_err = 0.0
         self.ex2_err = 0.0
         self.is_windup = False
         if self.use_integral_limit:
-            self.integral = BoundedQueue(self.integral_sec)
-        else:
-            self.integral = 0.0
-        
+            self.integral_que = BoundedQueue(self.integral_sec)
+        self.integral = 0.0
+    
+    
+    def get_current_pid_param(self):
+        return {'mv':self.mv,'vp':self.vp,'vi':self.vi,'vd':self.vd,'integral':self.integral}
+
 
     def update(self, err:float, ftype:str='default') -> float:
         """
-        サンプリング方式のPID制御
+        パラメータ更新
         """
         if ftype=='sampling':
-            current_mv = self.kp * (err - self.ex_err) + self.ki * err + self.kd * ((err - self.ex_err)-(self.ex_err - self.ex2_err))
-            output = current_mv + self.ex_mv
+            self.vp = self.kp * (err - self.ex_err)
+            self.vi = self.ki * err
+            self.vd = self.kd * ((err - self.ex_err)-(self.ex_err - self.ex2_err))
+            current_mv = self.vp + self.vi + self.vd 
+            self.mv = current_mv + self.ex_mv
             self.ex_mv = current_mv
             self.ex_err2 = self.ex_err
             self.ex_err = err
         else:
-            vp = self.kp * err
+            self.vp = self.kp * err
             
             err_s = (err + self.ex_err)*self.dt/2 # 台形近似
             #err_s = err * self.dt # 柵近似
 
             if self.use_integral_limit:
-                self.integral.put(err_s) 
-                vi = self.ki * sum(self.integral.get_values())
-                integral = sum(self.integral.get_values())
+                self.integral_que.put(err_s) 
+                self.vi = self.ki * sum(self.integral_que.get_values())
+                self.integral = sum(self.integral_que.get_values())
             else:
                 if not self.is_windup:
                     self.integral += err_s
-                vi = self.ki * self.integral
-                integral = self.integral
+                self.vi = self.ki * self.integral
 
-            vd = self.kd * (err - self.ex_err) / self.dt
+            self.vd = self.kd * (err - self.ex_err) / self.dt
             self.ex_err = err
             
-            output = vp + vi + vd
+            mv = self.vp + self.vi + self.vd
 
-            if output > MV_THRESHOLD:
-                output = MV_THRESHOLD
+            if mv > MV_THRESHOLD:
                 self.is_windup = True
-            elif output < 0:
+                self.mv = MV_THRESHOLD
+            elif mv < 0:
                 self.is_windup = True
-                output = 0
+                self.mv = 0
             else:
                 self.is_windup = False
-
-            with open(self.data_file, 'a') as file:
-                 data = f'mv:{output},vp:{vp},vi:{vi},vd:{vd},integral:{integral}'
-                 file.write(data + '\n')
-            print('mv',output,'vp',vp,'vi',vi,'vd',vd,'integral',integral)
-            return output
+                self.mv = mv
         
 
 class BoundedQueue:

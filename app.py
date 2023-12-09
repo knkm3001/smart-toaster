@@ -4,15 +4,17 @@ import random
 import atexit
 import signal
 import multiprocessing
+from typing import Final
 
 from flask import Flask, render_template, jsonify, request
 
+import read_temp_max6755 as max6755
 from read_temp import read_temp
 from pid import run_pid_process, ssr_control, gpio_creanup, generate_interp_data
 
 cleanup_done = False
 process = None
-gpio_pin = 14
+gpio_pin:Final[int] = 14
 
 manager = multiprocessing.Manager() # プロセス間でデータを共有のため、共有オブジェクトを作成
 status = manager.Value('s', 'not running')
@@ -26,8 +28,8 @@ def index():
 
 @app.route('/get_status')
 def get_status():
-    dummy = False # TODO for dev
-    temperature = round(random.uniform(20, 30), 2) if dummy else read_temp()
+    temperature = max6755.read_temp()
+    #temperature = round(random.uniform(20, 30), 2)
     return jsonify(
         temperature = temperature,
         timestamp = int(time.time()),
