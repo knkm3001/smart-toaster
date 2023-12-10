@@ -1,0 +1,29 @@
+version: '3'
+
+services:
+  app:
+    build: .
+    depends_on:
+      - redis
+    volumes:
+      - "/sys:/sys"
+      - "./src:/app/src"
+    devices:
+      - "/dev/gpiomem:/dev/gpiomem"
+    privileged: true
+    ports:
+      - "5000:5000"
+
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+
+  commander:
+    image: ghcr.io/joeferner/redis-commander:latest
+    depends_on:
+      - redis
+    environment:
+    - REDIS_HOSTS=local:redis:6379
+    ports:
+      - 8081:8081

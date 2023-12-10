@@ -1,4 +1,6 @@
 import time
+import json
+import redis
 from typing import Final
 from collections import deque
 from datetime import datetime
@@ -7,29 +9,39 @@ from datetime import datetime
 from read_temp import read_temp
 from ssr_control import gpio_control, gpio_creanup
 
-# PID制御器のパラメータとサンプリング時間
-kp:Final[float] = 10.0  # 比例
-ki:Final[float] = 0.05  # 積分
-kd:Final[float] = 16.0  # 微分
-dt:Final[float] = 1.0   # サンプリング時間[sec]
 
 MV_THRESHOLD:Final[float] = 1000.0 # 操作量の閾値
 
+def client_redis():
+    return redis.Redis(host='redis', port=6379, db=0)
 
-def run_pid_process(status,profile):
+
+def run_pid_process(status,recipe):
     """
     PID制御の実行関数
+
+    Args:
+        status (str): プロセスの状態を表す
+        recipe (dict): PID制御を行うためのパラメータ
+            {
+                "pid_param": {"kp":float,"ki":float,"kd":float,"dt":float}
+                "profile": list:[{'time':int,'temp':int}...]
+            } 
     """
     
     try:
-        pid = PIDController(kp, ki, kd, dt)
-        current_time = 0
-        data_file = 'data_'+datetime.now().strftime("%Y%m%d_%H%M") + '.txt'
+        pid = PIDController(**recipe["pid_param"])
+        print(f"current pid param: kp:{pid.kp} ki:{pid.ki} kd:{pid.kd} dt:{pid.dt}")
+        client = client_redis()
+        client.set("recipe",json.dumps(recipe))
 
-        for data in profile:
+        dt = recipe["pid_param"]["dt"]
+        current_time = 0
+
+        for target in recipe["profile"]:
             current_temp = read_temp()
             # current_temp = max6755.read_temp() # max6755を使う場合
-            error = data['temp'] - current_temp
+            error = target['temp'] - current_temp
             pid.update(error) # PID制御器の更新
             param = pid.get_current_pid_param()
 
@@ -37,11 +49,19 @@ def run_pid_process(status,profile):
                 param[key] = round(val,2)
             pot = round(dt*param['mv']/MV_THRESHOLD,2) # power on time [sec]
             
-            # TODO 現在のステータスをRedisとかに入れる
-            current_data = f"Time: {data['time']}, Target temp: {data['temp']}, Current temp: {current_temp}, Diff temp: {error}, toaster Ton: {pot} [sec], mv:{param['mv']}, vp:{param['vp']}, vi:{param['vi']}, vd:{param['vd']}, integral:{param['integral']}"
-            with open(data_file, 'a') as file:
-                 file.write(current_data + '\n')
-            print(current_data)
+            current_status = {
+                "target_temp": target['temp'],
+                "current_temp": current_temp,
+                "power_on_time": pot,
+                "mv": param['mv'],
+                "vp": param['vp'],
+                "vi": param['vi'], 
+                "vd": param['vd'],
+                "integral": param['integral'],
+            }
+            
+            client.set(current_time,json.dumps(current_status))
+            print(current_time,current_status)
 
             # 操作量の分だけ電源を制御する
             if pot > 0:

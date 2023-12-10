@@ -172,18 +172,18 @@ function getMaxData(chart,dataIndex,key) {
 
 // 温度データを定期的に取得し、リアルタイムでグラフに追加する
 function fetchStatus() {
-  fetch('/get_status')
+  fetch('/get_current_status')
     .then(response => response.json())
     .then(data => {
       console.log(data)
 
       // 表示部
-      document.getElementById('temperature').textContent = `current temperature: ${data.temperature.toFixed(2)} ℃`;
+      document.getElementById('temperature').textContent = `current temperature: ${data.current_temp.toFixed(2)} ℃`;
       document.getElementById('processStatus').textContent = `current process: ${data.process_status}`;
 
       // 初期値設定
       if(temperatureChart.data.datasets[0].data.length == 0){
-        temperatureChart.data.datasets[0].data[0] = {x:0, y:data.temperature};
+        temperatureChart.data.datasets[0].data[0] = {x:0, y:data.current_temp};
         temperatureChart.update();
       }
       
@@ -191,7 +191,7 @@ function fetchStatus() {
       if (do_record_temp) {
         const currentTempData = {
           x: data.timestamp - parseInt(process_start_timestamp / 1000), // sec to sec
-          y: data.temperature
+          y: data.current_temp
         };
         temperatureChart.data.datasets[1].data.push(currentTempData);
         console.log('current data',currentTempData)
@@ -234,13 +234,23 @@ startButton.addEventListener('click', () => {
   // TODO サーバ側とフロント側でタイムスタンプが別なので統一する
   process_start_timestamp = Date.now()
   console.log(process_start_timestamp)
+  
+  const payload = {
+    "profile": temperatureChart.data.datasets[0].data,
+    "pid_param": { // TODO マジックナンバー。あとでここは変更できるようにする
+      "kp": 10.0,
+      "ki": 0.05,
+      "kd": 18.0,
+      "dt": 1.0
+    }
+  }
 
   fetch('/run_process', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify(temperatureChart.data.datasets[0].data)
+    body: JSON.stringify(payload)
   })
     .then(response => {
       if (!response.ok) {
@@ -259,7 +269,7 @@ startButton.addEventListener('click', () => {
 // プロセスキャンセルボタン設定
 const stopButton = document.getElementById('stopButton');
 stopButton.addEventListener('click', () => {
-  fetch('/cancel_process', {
+  fetch('/kill_process', {
     method: 'GET'
   })
     .then(response => {
@@ -322,6 +332,7 @@ function downloadJson(jsonData, fileName) {
 }
 
 document.getElementById('saveProfile').addEventListener('click', () => {
+  // TODO redisのデータをダウンロードするようにする
   const fileName = 'profile.json';
   jsonData = temperatureChart.data.datasets[0].data;
   downloadJson(jsonData, fileName);
@@ -375,7 +386,7 @@ fileInput.addEventListener('change', () => {
 
 
 document.getElementById('downloadChartData').addEventListener('click', () => {
-  fetch('/get_profile', {
+  fetch('/get_pid_proc_status', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'

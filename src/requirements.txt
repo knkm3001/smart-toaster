@@ -1,0 +1,7 @@
+flask
+adafruit-circuitpython-max31855
+RPi.GPIO
+setuptools
+numpy
+redis
+aioredis
