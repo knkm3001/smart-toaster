@@ -25,15 +25,21 @@ DT:Final[float] = 1.0   # サンプリング時間[sec]
 
 cleanup_done = False
 process = None
-recipe:dict = {} 
 
 manager = multiprocessing.Manager() # プロセス間でデータを共有のため、共有オブジェクトを作成
-status = manager.Value('s', 'not running')
-# status:
+process_status = manager.Value('s', 'not running')
+# process_status:
 # - not running: まだPIDプロセスが起動していない
 # - running: PIDプロセスが起動中
 # - finished: PIDプロセス正常終了
 # - killed: PIDプロセス強制終了
+# - error: 何らかの理由でエラー
+
+# redis用client
+client = redis.Redis(host='redis', port=6379, db=0)
+client.set('process_status','not running')
+
+app = Flask(__name__)
 
 @dataclass
 class PidParam:
@@ -42,10 +48,7 @@ class PidParam:
     kd: float
     dt: float
 
-# redis用client
-client = redis.Redis(host='redis', port=6379, db=0)
 
-app = Flask(__name__)
 
 @app.route('/')
 def index():
@@ -70,17 +73,30 @@ def get_default_param():
         )
 
 
-@app.route('/get_current_status')
+@app.route('/get_status')
 def get_current_status():
     """
     現在のステータスを取得するためのエンドポイント
     """
+    min_key = request.args.get('minKey',None)
+    with_profile = request.args.get('withProfile',False)
+    status = {}
+    
+    redis_keys = client.keys()
+    for key in redis_keys:
+        str_key = key.decode('utf-8')
+        if str_key == "profile" and not with_profile:
+            continue
+        if min_key is not None and int(str_key) <= int(min_key):
+            continue
+        val = client.get(key)
+        str_val = val.decode('utf-8') if val is not None else None
+        status[str_key] = str_val
+
     return jsonify(
         current_temp = read_temp(),
         timestamp = int(time.time()),
-        process_status = status.value,
-        # TODO redis 読む
-        current_pid_proc_status = None
+        status = status
         ),200
 
 
@@ -89,20 +105,22 @@ def kill_process():
     """
     PID制御プロセスを停止するためのエンドポイント
     """
-    global process, status
+    global process, process_status
     gpio_control(power=False) # とにかくpowerはoff
 
+    process_status = client.get('process_status').decode('utf-8')
+
     if process is None or not process.is_alive():
-        if status.value == 'finished':
+        if process_status== 'finished':
             return jsonify({'message': 'Process is already finished'}), 200
-        elif status.value == 'killed':
+        elif process_status== 'killed':
             return jsonify({'message': 'Process is already killed'}), 200
         else:
             return jsonify({'message': 'Process is not running'}), 200
     else:
         process.terminate()
         process.join() # 子プロセスが完全にkillされることを待つ
-        status.value = 'killed'
+        client.set('process_status','killed')
         return jsonify({'message': 'Task killed'}), 200
 
 
@@ -111,7 +129,7 @@ def run_process():
     """
     PIDプロセスを起動するためのエンドポイント
     """
-    global process, status
+    global process, process_status
 
     # 与えられたプロファイルに従ってPID制御を行う
     if not request.method == 'POST':
@@ -127,15 +145,15 @@ def run_process():
         elif not payload.get("profile") or not payload.get("pid_param"):
             return jsonify({'error': 'invalid payload provided'}), 400
         else:
-            recipe = copy.deepcopy(payload)
-            recipe["profile"] = generate_interp_profile(payload["profile"])
-            if not recipe["profile"]:
+            pid_param = payload["pid_param"]
+            interp_profile = generate_interp_profile(payload["profile"])
+            if not interp_profile:
                 return jsonify({'message': 'invalid profile'}), 400
             
             # PID制御プロセスを非同期で実行
-            process = multiprocessing.Process(target=run_pid_process, args=(status,recipe))
+            process = multiprocessing.Process(target=run_pid_process, args=(interp_profile,pid_param))
             process.start()
-            status.value = 'running'
+            client.set('process_status','running')
             print('process start!! pid: ',process.pid)
             return jsonify({'message': 'process started'}), 200
 
@@ -145,41 +163,14 @@ def status_clear():
     """
     redisに記録されているPIDプロセスのステータスを初期化する
     """
-    global status
+    global process_status
 
     if process is None or not process.is_alive():
         client.flushdb() # redis clear
-        status.value  = 'not running'
-        return jsonify({'message': 'status is cleared'}), 200
+        client.set('process_status','not running')
+        return jsonify({'message': 'process_status is cleared'}), 200
     else:
         return jsonify({'message': 'process is alive'}), 400
-
-
-@app.route('/get_pid_proc_status', methods=['POST'])
-def get_log():
-    """
-    redisに記録されているPIDプロセスのステータスをすべて取得する
-    """
-    return 200
-
-
-@app.route('/set_profile', methods=['POST'])
-def set_profile():
-    """
-    既存のプロファイルを読み込む
-    """
-    return 200
-    # プロファイルデータを読み込む
-    payload_profile = request.get_json()
-    print('payload_profile',payload_profile)
-    if payload_profile is None:
-        # JSON データが存在しない場合、400 ステータスコードを返す
-        return jsonify({'error': 'No profile provided'}), 400
-    elif status.value  != 'not running':
-        return jsonify({'error': 'PID process is already runnning'}), 400
-    else:
-        interp_profile = generate_interp_profile(payload_profile)
-        return jsonify({'message': 'received profile'}), 200
 
 
 def cleanup():

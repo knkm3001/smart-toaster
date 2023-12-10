@@ -16,29 +16,28 @@ def client_redis():
     return redis.Redis(host='redis', port=6379, db=0)
 
 
-def run_pid_process(status,recipe):
+def run_pid_process(profile, pid_param):
     """
     PID制御の実行関数
 
     Args:
-        status (str): プロセスの状態を表す
-        recipe (dict): PID制御を行うためのパラメータ
-            {
-                "pid_param": {"kp":float,"ki":float,"kd":float,"dt":float}
-                "profile": list:[{'time':int,'temp':int}...]
-            } 
+        process_status (str): プロセスの状態を表す
+        pid_param (dict): {"kp":float,"ki":float,"kd":float,"dt":float} PID制御を行うためのパラメータ
+        profile (dict): list:[{'time':int,'temp':int}...]
     """
     
     try:
-        pid = PIDController(**recipe["pid_param"])
+        pid = PIDController(**pid_param)
         print(f"current pid param: kp:{pid.kp} ki:{pid.ki} kd:{pid.kd} dt:{pid.dt}")
         client = client_redis()
-        client.set("recipe",json.dumps(recipe))
+        client.set("pid_param",json.dumps(pid_param))
+        client.set("profile",json.dumps(profile))
 
-        dt = recipe["pid_param"]["dt"]
+        dt = pid_param["dt"]
         current_time = 0
 
-        for target in recipe["profile"]:
+        for target in profile:
+            
             current_temp = read_temp()
             # current_temp = max6755.read_temp() # max6755を使う場合
             error = target['temp'] - current_temp
@@ -48,11 +47,13 @@ def run_pid_process(status,recipe):
             for key,val in param.items():
                 param[key] = round(val,2)
             pot = round(dt*param['mv']/MV_THRESHOLD,2) # power on time [sec]
-            
+            process_status = client.get('process_status').decode('utf-8')
+
             current_status = {
                 "target_temp": target['temp'],
                 "current_temp": current_temp,
                 "power_on_time": pot,
+                "process_status": process_status,
                 "mv": param['mv'],
                 "vp": param['vp'],
                 "vi": param['vi'], 
@@ -77,11 +78,13 @@ def run_pid_process(status,recipe):
             current_time += dt
         else:
             gpio_control(power=False)
-            status.value = 'finished'
-    except KeyboardInterrupt:
+            process_status.value = 'finished'
+            client.set('process_status','finished')
+    except Exception as e:
         gpio_control(power=False)
         print('error!:',str(e))
-        status.value = 'error:' + str(e)
+        error = 'error:' + str(e)
+        client.set('process_status',error)
     
 
 class PIDController:

@@ -1,8 +1,10 @@
 const defaultMaxY = 300;
 const defaultMaxX = 600;
-let do_pid_process = false;
-let do_record_temp = false;
+let do_pid_process = false; // トースターRUNボタンによりPID制御が起動している
+let do_record_temp = false; // トースターRun時に温度をプロットする
 let process_start_timestamp = NaN; // トースターrun時のタイムスタンプ
+let selectedPoint = null; // ドラッグアンドドロップで掴んだポイント
+let latestRedisKey = null; // フロント側で持っている最新のRedisKey
 
 const chartElement = document.getElementById('temperatureChart');
 const temperatureChart = new Chart(chartElement, {
@@ -99,9 +101,9 @@ const temperatureChart = new Chart(chartElement, {
   plugins: [],
 });
 
-fetchStatus(); //初期化データ取得
 
-let selectedPoint = null; // ドラッグアンドドロップで掴んだポイント
+
+fetchStatus(latestRedisKey); //初期化データ取得
 
 // 図上で押下したら近くのポイントを取得する
 chartElement.addEventListener('mousedown', (event) => {
@@ -171,15 +173,19 @@ function getMaxData(chart,dataIndex,key) {
 }
 
 // 温度データを定期的に取得し、リアルタイムでグラフに追加する
-function fetchStatus() {
-  fetch('/get_current_status')
+function fetchStatus(latestRedisKey) {
+  let getStatusEndPoint = '/get_status';
+  if (latestRedisKey !== null && typeof latestRedisKey === 'number') {
+    getStatusEndPoint += `?minKey=${latestRedisKey}`;
+  }
+  fetch(getStatusEndPoint)
     .then(response => response.json())
     .then(data => {
       console.log(data)
 
       // 表示部
       document.getElementById('temperature').textContent = `current temperature: ${data.current_temp.toFixed(2)} ℃`;
-      document.getElementById('processStatus').textContent = `current process: ${data.process_status}`;
+      document.getElementById('processStatus').textContent = `current process: ${data.status.process_status}`;
 
       // 初期値設定
       if(temperatureChart.data.datasets[0].data.length == 0){
@@ -216,7 +222,7 @@ function fetchStatus() {
 // 2秒ごとに温度データを取得する
 setInterval(fetchStatus, 2000);
 
-// トースターランボタンの設定
+// トースターRunボタンの設定
 const startButton = document.getElementById('startButton');
 startButton.addEventListener('click', () => {
   do_pid_process = true;
@@ -332,7 +338,6 @@ function downloadJson(jsonData, fileName) {
 }
 
 document.getElementById('saveProfile').addEventListener('click', () => {
-  // TODO redisのデータをダウンロードするようにする
   const fileName = 'profile.json';
   jsonData = temperatureChart.data.datasets[0].data;
   downloadJson(jsonData, fileName);
@@ -386,12 +391,8 @@ fileInput.addEventListener('change', () => {
 
 
 document.getElementById('downloadChartData').addEventListener('click', () => {
-  fetch('/get_pid_proc_status', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(temperatureChart.data.datasets[0].data)
+  fetch('/get_status?withProfile=True', {
+    method: 'GET'
   })
   .then(response => {
     if (!response.ok) {
@@ -400,7 +401,7 @@ document.getElementById('downloadChartData').addEventListener('click', () => {
     return response.json();
   })
   .then(data => {
-    const jsonData = [data,temperatureChart.data.datasets[1].data];
+    const jsonData = data.status;
     const fileName = 'chart_data.json';
     downloadJson(jsonData, fileName);
   })
