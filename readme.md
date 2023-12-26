@@ -19,14 +19,16 @@
 今回はトースターの温度と加熱時間をラズベリーパイによって管理したいので、このサーモスタットとタイマーを取り外し、直流で接続する。  
 つまり、オーブントースターを電源に接続したら加熱が始まるようにする。  
   
-画像は廣瀬無線電機 Hi-Rose HR-T121を使用。  
+今回は廣瀬無線電機 Hi-Rose HR-T121を使用。  
 
 ### RasPiのハードウェア周り
-1. SSRの準備
+1. SSRの準備  
   延長ケーブルを改造し、SSRで制御できるようにする。ヒューズも装着。
-1. MAX31855の準備
-  プレッドボードとと熱電対を接続
+1. MAX31855の準備  
+  プレッドボードと熱電対を接続
 1. SSRとMAX31855をRaspberryPiのGPIOに接続し回路を組む
+
+<img src="https://github.com/knkm3001/smart-toaster/assets/54818379/dbe64e20-4742-4a99-8a6c-761723dfb18b" width="400">
 
 参考: https://learn.adafruit.com/thermocouple/python-circuitpython
 
