@@ -1,45 +1,41 @@
 import time
 import json
 import redis
+import traceback
 from typing import Final
 from collections import deque
 from datetime import datetime
 
-# import read_temp_max6755 as max6755
 from read_temp import read_temp
 from ssr_control import gpio_control, gpio_creanup
-
+from redis_client import redis_client
 
 MV_THRESHOLD:Final[float] = 1000.0 # 操作量の閾値
 
-def client_redis():
-    return redis.Redis(host='redis', port=6379, db=0)
-
-
-def run_pid_process(profile, pid_param):
+def pid_process():
     """
     PID制御の実行関数
-
-    Args:
-        process_status (str): プロセスの状態を表す
-        pid_param (dict): {"kp":float,"ki":float,"kd":float,"dt":float} PID制御を行うためのパラメータ
-        profile (dict): list:[{'time':int,'temp':int}...]
     """
     
     try:
+        client = redis_client()
+        values = client.mget(['pid_param','interp_profile'])
+        decoded_values = [value.decode('utf-8') for value in values]
+        pid_param = json.loads(decoded_values[0])
+        pid_param =  {k: float(v) for k, v in pid_param.items()}
+        interp_profile = json.loads(decoded_values[1])
+
         pid = PIDController(**pid_param)
-        print(f"current pid param: kp:{pid.kp} ki:{pid.ki} kd:{pid.kd} dt:{pid.dt}")
-        client = client_redis()
-        client.set("pid_param",json.dumps(pid_param))
-        client.set("profile",json.dumps(profile))
+        print("pid process start!!")
+        client.set("pid_process_status",'running')
 
         dt = pid_param["dt"]
-        current_time = 0
+        time_passed = 0
 
-        for target in profile:
+        # PIDループ
+        for target in interp_profile:
             
             current_temp = read_temp()
-            # current_temp = max6755.read_temp() # max6755を使う場合
             error = target['temp'] - current_temp
             pid.update(error) # PID制御器の更新
             param = pid.get_current_pid_param()
@@ -47,13 +43,15 @@ def run_pid_process(profile, pid_param):
             for key,val in param.items():
                 param[key] = round(val,2)
             pot = round(dt*param['mv']/MV_THRESHOLD,2) # power on time [sec]
-            process_status = client.get('process_status').decode('utf-8')
+            pid_process_status = client.get('pid_process_status').decode('utf-8')
 
             current_status = {
+                "time_passed": time_passed,
                 "target_temp": target['temp'],
                 "current_temp": current_temp,
+                "timestamp": time.time(),
                 "power_on_time": pot,
-                "process_status": process_status,
+                "pid_process_status": pid_process_status,
                 "mv": param['mv'],
                 "vp": param['vp'],
                 "vi": param['vi'], 
@@ -61,8 +59,8 @@ def run_pid_process(profile, pid_param):
                 "integral": param['integral'],
             }
             
-            client.set(current_time,json.dumps(current_status))
-            print(current_time,current_status)
+            client.rpush('status_data',json.dumps(current_status))
+            #print(time_passed,current_status)
 
             # 操作量の分だけ電源を制御する
             if pot > 0:
@@ -75,16 +73,16 @@ def run_pid_process(profile, pid_param):
             else:
                 gpio_control(power=False)
                 time.sleep(dt)
-            current_time += dt
+            time_passed += dt
         else:
             gpio_control(power=False)
-            process_status.value = 'finished'
-            client.set('process_status','finished')
+            client.set('pid_process_status','finished')
+            print('pid process finished!!')
     except Exception as e:
         gpio_control(power=False)
-        print('error!:',str(e))
-        error = 'error:' + str(e)
-        client.set('process_status',error)
+        print('error!:',traceback.format_exc())
+        error = 'error!:' + traceback.format_exc()
+        client.set('pid_process_status',error)
     
 
 class PIDController:
@@ -106,7 +104,7 @@ class PIDController:
         self.ex_mv = 0.0
         self.ex_err = 0.0
         self.ex2_err = 0.0
-        self.is_windup = False          # 積分項が飽和状態か(Anti-windup)
+        self.is_windup = False # 積分項が飽和状態か(Anti-windup)
 
         self.use_integral_limit = False # 積分項に加算する値の有効範囲を設定するかどうか
         if self.use_integral_limit:

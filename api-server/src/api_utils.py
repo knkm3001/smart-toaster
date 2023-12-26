@@ -1,6 +1,6 @@
 import numpy as np
 
-def generate_interp_profile(data:list,dt:int=1):
+def generate_interp_profile(data:list,dt:int=1) -> list:
     """
     APIのペイロードで渡されたプロファイルデータを線形補完し、サンプリング時間ごとの目標温度を作成する
 
@@ -16,6 +16,10 @@ def generate_interp_profile(data:list,dt:int=1):
 
     is_invalid_data = False
     ex_coord = None
+
+    if len(data) < 2:
+        return []
+
     for coord in data:
         if ex_coord is None:
             if coord['x'] != 0: # 必ずx=0始まりであること

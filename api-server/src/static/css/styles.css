@@ -1,0 +1,60 @@
+body {
+    font-family: Arial, sans-serif;
+    height: 100vh;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap; /* 子要素が必要に応じて折り返されるように設定 */
+}
+
+.chart-container {
+    width: 70%;
+    /* 高さを少し縮小または具体的な値に設定 */
+    height: 50%;
+    position: relative;
+    margin-bottom: 20px;
+    text-align: right;
+}
+
+#coordinates {
+    font-size: 14px;
+}
+
+canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.info-container {
+    height: 20%;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.info-container > div {
+    margin-bottom: 10px;
+}
+
+
+.input-group {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px; /* グループ間のスペース */
+}
+
+.input-group label {
+    width: 200px;
+    margin-right: 10px;
+    text-align: right;
+}
+
+.input-group input {
+    width: 60px; /* 入力フィールドの幅 */
+}

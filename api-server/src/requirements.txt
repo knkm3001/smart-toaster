@@ -4,4 +4,3 @@ RPi.GPIO
 setuptools
 numpy
 redis
-aioredis

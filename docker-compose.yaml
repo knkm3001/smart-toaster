@@ -1,13 +1,14 @@
 version: '3'
 
 services:
-  app:
-    build: .
+  api-server:
+    build:
+      context: api-server
     depends_on:
       - redis
     volumes:
       - "/sys:/sys"
-      - "./src:/app/src"
+      - "./api-server/src:/app/src"
     devices:
       - "/dev/gpiomem:/dev/gpiomem"
     privileged: true
