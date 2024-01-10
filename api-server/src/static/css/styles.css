@@ -1,19 +1,45 @@
-body {
+.container {
     font-family: Arial, sans-serif;
     height: 100vh;
     margin: 0;
     padding: 0;
     display: flex;
-    flex-direction: column;
-    align-items: center;
+    flex-wrap: wrap;
+}
+
+/* デフォルトは縦方向 */
+.chart-container, .info-container {
+    width: 100%;
+    height: 50%;
+    display: flex;
     justify-content: center;
-    flex-wrap: wrap; /* 子要素が必要に応じて折り返されるように設定 */
+    align-items: center;
+    flex-direction: column; /* 子要素を縦に並べる */
+    font-size: 16px;
+}
+
+/* 子要素のスタイルが影響を受けないようにする場合 */
+.chart-container > div, .info-container > div {
+    width: 100%; /* 子要素がコンテナの幅を完全に使用するように */
+    text-align: center;
+}
+
+/* 横長の画面の場合 */
+@media screen and (orientation: landscape) {
+
+    .chart-container {
+        width: 65%;
+        height: 100%;
+    }
+
+    .info-container {
+        width: 35%;
+        height: 100%;
+    }
+
 }
 
 .chart-container {
-    width: 70%;
-    /* 高さを少し縮小または具体的な値に設定 */
-    height: 50%;
     position: relative;
     margin-bottom: 20px;
     text-align: right;
@@ -30,10 +56,6 @@ canvas {
 }
 
 .info-container {
-    height: 20%;
-    width: 100%;
-    display: flex;
-    flex-direction: column;
     align-items: center;
     margin-bottom: 20px;
 }
@@ -45,7 +67,9 @@ canvas {
 
 .input-group {
     display: flex;
+    justify-content: center;
     align-items: center;
+    margin: auto;
     margin-bottom: 10px; /* グループ間のスペース */
 }
 
