@@ -58,8 +58,6 @@ function fetchStatus(isInit=false) {
       // 表示部初期化
       document.getElementById('temperature').textContent = `current temperature: ${data.current_temp.toFixed(2)} ℃`;
       document.getElementById('processStatus').textContent = `current process: ${data.pid_process_status}`;
-      document.getElementById('toasterOutPut').textContent = `current output: 0.0 %`;
-      document.getElementById('coordinates').textContent = `Time: 0.0 [sec], Temperature: ${data.current_temp.toFixed(2)} [℃]`;
 
       // 初期化時
       if(isInit){
@@ -67,7 +65,11 @@ function fetchStatus(isInit=false) {
         kp = data.pid_param.kp;
         ki = data.pid_param.ki;
         kd = data.pid_param.kd;
-
+        temperatureChart.data.datasets[0].data = [];
+        temperatureChart.data.datasets[1].data = [];
+        document.getElementById('toasterOutPut').textContent = `current output: 0.0 %`;
+        document.getElementById('coordinates').textContent = `Time: 0.0 [sec], Temperature: ${data.current_temp.toFixed(2)} [℃]`;
+        
         if(processStatus !== 'not running'){
           pidProcessIsRunning = true
           disabledToasterRunButton();
