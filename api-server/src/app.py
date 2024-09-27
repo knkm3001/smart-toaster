@@ -1,10 +1,8 @@
 import sys
 import time
 import json
-import random
-import atexit
+import os
 import signal
-import redis
 import multiprocessing
 from typing import Final
 
@@ -17,11 +15,15 @@ from pid import pid_process
 from api_utils import generate_interp_profile
 from redis_client import redis_client
 
+
+REDIS_HOSTS:Final[str] = os.environ['REDIS_HOSTS']
+REDIS_PORT:Final[str] = os.environ['REDIS_PORT']
+
 # PID制御器のパラメータとサンプリング時間のデフォルト値
-KP:Final[float] = 10.0  # 比例
-KI:Final[float] = 0.1   # 積分
-KD:Final[float] = 18.0  # 微分
-DT:Final[float] = 1.0   # サンプリング時間[sec]
+KP:Final[float] = float(os.getenv('KP', '10.0 ')) # 比例
+KI:Final[float] = float(os.getenv('KI', '0.1'))  # 積分
+KD:Final[float] = float(os.getenv('KD', '18.0'))  # 微分
+DT:Final[float] = float(os.getenv('DT', '1.0'))   # サンプリング時間[sec]
 
 cleanup_done = False
 process = None
@@ -29,15 +31,12 @@ process = None
 default_pid_param = {"kp":KP,"ki":KI,"kd":KD,"dt":DT}
 
 # redis用client
-client = redis_client()
+client = redis_client(REDIS_HOSTS,REDIS_PORT)
 client.flushdb() # redis clear
 client.set('pid_process_status','not running')
 client.set('pid_param',json.dumps(default_pid_param))
 
 app = Flask(__name__)
-
-
-
 
 
 @app.route('/')

@@ -1,16 +1,18 @@
 import time
 import json
-import redis
+import os
 import traceback
 from typing import Final
 from collections import deque
-from datetime import datetime
 
 from read_temp import read_temp
-from ssr_control import gpio_control, gpio_creanup
+from ssr_control import gpio_control
 from redis_client import redis_client
 
-MV_THRESHOLD:Final[float] = 1000.0 # 操作量の閾値
+MV_THRESHOLD:Final[float] = float(os.getenv('MV_THRESHOLD', '1000.0'))   # 操作量の閾値
+REDIS_HOSTS:Final[str] = os.environ['REDIS_HOSTS']
+REDIS_PORT:Final[str] = os.environ['REDIS_PORT']
+
 
 def pid_process():
     """
@@ -18,7 +20,7 @@ def pid_process():
     """
     
     try:
-        client = redis_client()
+        client = redis_client(REDIS_HOSTS,REDIS_PORT)
         values = client.mget(['pid_param','interp_profile'])
         decoded_values = [value.decode('utf-8') for value in values]
         pid_param = json.loads(decoded_values[0])

@@ -31,5 +31,6 @@ redis model
 """
 import redis
 
-def redis_client():
-    return redis.Redis(host='redis', port=6379, db=0)
+
+def redis_client(redis_hosts,redis_port):
+    return redis.Redis(host=redis_hosts, port=redis_port, db=0)

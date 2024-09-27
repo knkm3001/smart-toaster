@@ -12,6 +12,15 @@ services:
     devices:
       - "/dev/gpiomem:/dev/gpiomem"
     privileged: true
+    environment:
+    - REDIS_HOSTS=redis
+    - REDIS_PORT=6379
+    - KP=10.0
+    - KI=0.1
+    - KD=18.0
+    - DT=1.0
+    - MV_THRESHOLD=1000.0
+
     ports:
       - "5000:5000"
 
