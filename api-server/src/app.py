@@ -7,6 +7,7 @@ import multiprocessing
 from typing import Final
 
 from flask import Flask, render_template, jsonify, request
+from data_models import PIDParams, StatusData, Recipe
 
 # import read_temp_max6755 as max6755
 from read_temp import read_temp
@@ -20,15 +21,18 @@ REDIS_HOSTS:Final[str] = os.environ['REDIS_HOSTS']
 REDIS_PORT:Final[str] = os.environ['REDIS_PORT']
 
 # PID制御器のパラメータとサンプリング時間のデフォルト値
-KP:Final[float] = float(os.getenv('KP', '10.0 ')) # 比例
-KI:Final[float] = float(os.getenv('KI', '0.1'))  # 積分
-KD:Final[float] = float(os.getenv('KD', '18.0'))  # 微分
-DT:Final[float] = float(os.getenv('DT', '1.0'))   # サンプリング時間[sec]
+pid_params = PIDParams()
 
 cleanup_done = False
 process = None
 
-default_pid_param = {"kp":KP,"ki":KI,"kd":KD,"dt":DT}
+default_pid_param = {
+    "kp": pid_params.kp,
+    "ki": pid_params.ki,
+    "kd": pid_params.kd,
+    "dt": pid_params.dt,
+    "mv_threshold": pid_params.dtmv_threshold
+    }
 
 # redis用client
 client = redis_client(REDIS_HOSTS,REDIS_PORT)
@@ -66,11 +70,12 @@ def get_current_status():
             - profile (list): profile(option)
     """
 
-    # TODO バリデータ
-    min_key = request.args.get('minKey',0)
-    if min_key != 0 and not min_key.isdigit():
-        return jsonify({'error': 'invalid parametor provided'}), 400
-    min_key = int(min_key)
+    try:
+        min_key = int(request.args.get('minKey', 0))
+        if min_key < 0:
+            raise ValueError
+    except ValueError:
+        return jsonify({'error': 'invalid parameter provided'}), 400
 
     is_init = request.args.get('isInit',False)
 
@@ -94,8 +99,8 @@ def get_current_status():
             current_temp = read_temp(),
             current_timestamp = time.time(),
             pid_process_status = pid_process_status,
-            pid_param = pid_param,
             status_data = status_data,
+            pid_param = pid_param,
             profile = profile
             ),200
     else:
@@ -114,12 +119,15 @@ def get_chart_data():
     """
     chartデータを全部取得
 
+    Params:
+        None
+
     Returns:
-        recipe (bool): 使用したオリジナルのプロファイルとPIDパラメータを取得する
+        recipe (dict): 使用したオリジナルのプロファイルとPIDパラメータを取得する
             - pid_param (dict):
             - profile (list): 
         interp_profile (bool): 線形補間したプロファイルを取得する
-        status_data (list): データ
+        status_data (status): データ
     """
     recipe = {}
     values = client.mget(['pid_param','profile', 'interp_profile'])
@@ -141,7 +149,16 @@ def get_chart_data():
 @app.route('/run_process',methods=["POST"])
 def run_process():
     """
-    PIDプロセスを起動するためのエンドポイント
+    レシピデータをPOSTし、PIDプロセスを起動するためのエンドポイント
+
+    Payload:
+        profile (dict): プロセスのプロファイル設定。
+        pid_param (dict): プロセスを起動するために必要なパラメータ。Optional
+
+
+    Returns:
+        dict: 実行結果
+            - message (str): 実行結果を伝えるメッセージ
     """
     global process
 
@@ -159,22 +176,19 @@ def run_process():
             return jsonify({'error': 'invalid payload provided'}), 400
         else:
 
-            # pid param取得
-            if payload.get("pid_param"):
-                try:
-                    for v in payload["pid_param"].values():
-                        isinstance(float(v), float)
-                except Exception as e:
-                    return jsonify({'error': 'invalid prid_param provided' + str(e)}), 400 
+            # バリデートチェック
+            try:
+                recipe = Recipe(**payload)
+                pid_param = recipe.pid_param.dict() if recipe.pid_param else default_pid_param
+            except Exception as e:
+                return jsonify({'error': 'invalid prid_param provided' + str(e)}), 400 
 
-                pid_param = payload["pid_param"]
-            else:
-                pid_param = default_pid_param
-
-            # 線形補間 TODO バリデータ
-            interp_profile = generate_interp_profile(payload["profile"])
-            if not interp_profile:
-                return jsonify({'message': 'invalid profile'}), 400
+            # 線形補間
+            try:
+                recipe_profile_points = [point.dict() for point in recipe.profile]
+                interp_profile = generate_interp_profile(recipe_profile_points)
+            except Exception as e:
+                return jsonify({'error': 'invalid profile' + str(e)}), 400 
 
             kv_pairs = {
                 'profile': json.dumps(payload["profile"]),
@@ -194,6 +208,13 @@ def run_process():
 def kill_process():
     """
     PID制御プロセスを停止するためのエンドポイント
+
+    Params:
+        None
+        
+    Returns:
+        dict: 実行結果
+            - message (str): 実行結果を伝えるメッセージ
     """
     global process
     gpio_control(power=False) # とにかくpowerはoff
@@ -218,6 +239,13 @@ def kill_process():
 def status_clear():
     """
     redisに記録されているPIDプロセスのステータスを初期化する
+
+    Params:
+        None
+        
+    Returns:
+        dict: 実行結果
+            - message (str): 実行結果を伝えるメッセージ
     """
 
     if process is None or not process.is_alive():
@@ -249,7 +277,7 @@ def exit_handler(signal, frame):
 
 
 signal.signal(signal.SIGINT, exit_handler) # Ctrl+C (デバッグモードだとプロセスが二つあるから２回実行される)
-#atexit.register(cleanup) # 通常修了時
+#atexit.register(cleanup) # 通常終了時
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

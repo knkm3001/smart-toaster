@@ -9,7 +9,6 @@ from read_temp import read_temp
 from ssr_control import gpio_control
 from redis_client import redis_client
 
-MV_THRESHOLD:Final[float] = float(os.getenv('MV_THRESHOLD', '1000.0'))   # 操作量の閾値
 REDIS_HOSTS:Final[str] = os.environ['REDIS_HOSTS']
 REDIS_PORT:Final[str] = os.environ['REDIS_PORT']
 
@@ -32,6 +31,7 @@ def pid_process():
         client.set("pid_process_status",'running')
 
         dt = pid_param["dt"]
+        mv_threshold = pid_param.get('mv_threshold') or 1000.0
         time_passed = 0
 
         # PIDループ
@@ -44,7 +44,13 @@ def pid_process():
 
             for key,val in param.items():
                 param[key] = round(val,2)
-            pot = round(dt*param['mv']/MV_THRESHOLD,2) # power on time [sec]
+            pot = round(dt*param['mv']/mv_threshold,2) # power on time [sec]
+            
+            if pot > dt:
+                pot = dt
+            elif pot < 0.02: # 50Hz未満は0とする  
+                pot = 0
+
             pid_process_status = client.get('pid_process_status').decode('utf-8')
 
             current_status = {
@@ -66,12 +72,10 @@ def pid_process():
 
             # 操作量の分だけ電源を制御する
             if pot > 0:
-                pot = pot if pot > 0.01 else 0.01
                 gpio_control(power=True)
                 time.sleep(pot) # pwm on
-                if pot < dt: 
-                    gpio_control(power=False)
-                    time.sleep(dt-pot) # pwm off
+                gpio_control(power=False)
+                time.sleep(dt-pot) # pwm off
             else:
                 gpio_control(power=False)
                 time.sleep(dt)
@@ -91,13 +95,14 @@ class PIDController:
     """
     PID制御器クラス
     """
-    def __init__(self, kp, ki, kd, dt):
+    def __init__(self, kp, ki, kd, dt, mv_thred=1000.0):
         # 定数
-        self.kp = kp
-        self.ki = ki
-        self.kd = kd
-        self.dt = dt
-        
+        self.KP = kp
+        self.KI = ki
+        self.KD = kd
+        self.DT = dt
+        self.MV_THRED = mv_thred
+
         # 変数
         self.mv = 0
         self.vp = 0
@@ -108,8 +113,8 @@ class PIDController:
         self.ex2_err = 0.0
         self.is_windup = False # 積分項が飽和状態か(Anti-windup)
 
-        self.use_integral_limit = False # 積分項に加算する値の有効範囲を設定するかどうか
-        if self.use_integral_limit:
+        self.use_integral_window = False # 積分項に加算する値の有効範囲を設定するかどうか
+        if self.use_integral_window:
             self.integral_sec = 180 # 誤差量としてため込む変数の数(=有効範囲)
             self.integral_que = BoundedQueue(self.integral_sec)
         else:
@@ -125,7 +130,7 @@ class PIDController:
         self.ex_err = 0.0  # 前回の誤差量
         self.ex2_err = 0.0 # 前々回の誤差量
         self.is_windup = False
-        if self.use_integral_limit:
+        if self.use_integral_window:
             self.integral_que = BoundedQueue(self.integral_sec)
         self.integral = 0.0
     
@@ -140,37 +145,37 @@ class PIDController:
         """
 
         if ftype=='sampling':
-            self.vp = self.kp * (err - self.ex_err)
-            self.vi = self.ki * err
-            self.vd = self.kd * ((err - self.ex_err)-(self.ex_err - self.ex2_err))
+            self.vp = self.KP * (err - self.ex_err)
+            self.vi = self.KI * err
+            self.vd = self.KD * ((err - self.ex_err)-(self.ex_err - self.ex2_err))
             current_mv = self.vp + self.vi + self.vd 
             self.mv = current_mv + self.ex_mv
             self.ex_mv = current_mv
             self.ex_err2 = self.ex_err
             self.ex_err = err
         else:
-            self.vp = self.kp * err
+            self.vp = self.KP * err
             
-            err_s = (err + self.ex_err)*self.dt/2 # 台形近似
-            #err_s = err * self.dt # 柵近似
+            err_s = (err + self.ex_err)*self.DT/2 # 台形近似
+            #err_s = err * self.DT # 柵近似
 
-            if self.use_integral_limit:
+            if self.use_integral_window:
                 self.integral_que.put(err_s) 
-                self.vi = self.ki * sum(self.integral_que.get_values())
+                self.vi = self.KI * sum(self.integral_que.get_values())
                 self.integral = sum(self.integral_que.get_values())
             else:
                 if not self.is_windup:
                     self.integral += err_s
-                self.vi = self.ki * self.integral
+                self.vi = self.KI * self.integral
 
-            self.vd = self.kd * (err - self.ex_err) / self.dt
+            self.vd = self.KD * (err - self.ex_err) / self.DT
             self.ex_err = err
             
             mv = self.vp + self.vi + self.vd
 
-            if mv > MV_THRESHOLD:
+            if mv > self.MV_THRED:
                 self.is_windup = True
-                self.mv = MV_THRESHOLD
+                self.mv = self.MV_THRED
             elif mv < 0:
                 self.is_windup = True
                 self.mv = 0

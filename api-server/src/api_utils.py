@@ -14,7 +14,6 @@ def generate_interp_profile(data:list,dt:int=1) -> list:
     x_new = np.array([])
     y_new = np.array([])
 
-    is_invalid_data = False
     ex_coord = None
 
     if len(data) < 2:
@@ -23,15 +22,16 @@ def generate_interp_profile(data:list,dt:int=1) -> list:
     for coord in data:
         if ex_coord is None:
             if coord['x'] != 0: # 必ずx=0始まりであること
-                is_invalid_data = True
-                break
+                raise ValueError("xが0から始まっていない")
             else:
                 ex_coord = coord
                 continue
         else:
             if coord['x'] < ex_coord['x']:
-                is_invalid_data = True
-                break
+                raise ValueError("時間が時系列でない")
+            elif coord['y'] < 0:
+                raise ValueError("温度が0以下になっている")
+            
             # 線形補間
             x_points = (ex_coord['x'],coord['x'])
             y_points = (ex_coord['y'],coord['y'])
@@ -40,8 +40,6 @@ def generate_interp_profile(data:list,dt:int=1) -> list:
             x_new = np.concatenate([x_new, x_generated]) 
             y_new = np.concatenate([y_new, y_generated])
             ex_coord = coord
-        
-    if is_invalid_data:
-        return []
+    
     else:
         return [{'time':x,'temp':round(y,2)} for x,y in zip(x_new,y_new)]
